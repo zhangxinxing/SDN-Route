@@ -12,14 +12,16 @@ from ryu.controller.controller import Datapath
 
 
 class Switch:
-    """
-    :type datapath: Datapath
-    :type ports: list[]
-    """
-
     def __init__(self, datapath):
-        self.datapath = datapath
-        self.ports = []
+        self.datapath = datapath  # type: Datapath
 
-    def add_port(self, port):
-        self.ports.append(port)
+    def add_lldp_flow(self, port):
+        ofp = self.datapath.ofproto
+        parser = self.datapath.ofproto_parser
+
+        # install LLDP flow entry
+        match = parser.OFPMatch(eth_type=0x88CC)
+        actions = [parser.OFPActionOutput(ofp.OFPP_CONTROLLER, ofp.OFPCML_NO_BUFFER)]
+        inst = [parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS, actions)]
+        msg = parser.OFPFlowMod(self.datapath, command=ofp.OFPFC_ADD, match=match, instructions=inst)
+        self.datapath.send_msg(msg)
