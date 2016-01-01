@@ -6,6 +6,7 @@
 #
 # [] Created By : Parham Alvani (parham.alvani@gmail.com)
 # =======================================
+
 __author__ = 'Parham Alvani'
 
 from ryu.lib import packet
@@ -16,6 +17,7 @@ from ryu.controller.handler import set_ev_cls
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER
 from ryu.controller.handler import MAIN_DISPATCHER
+from ryu.controller.dpset import EventDP
 import array
 
 
@@ -24,6 +26,7 @@ class Dijkstra(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(Dijkstra, self).__init__(*args, **kwargs)
+        self.switchs = []
 
     @set_ev_cls(ofp_event.EventOFPPortStatus, MAIN_DISPATCHER)
     def port_status_handler(self, ev):
@@ -43,20 +46,21 @@ class Dijkstra(app_manager.RyuApp):
         self.logger.debug('### OFPPortStatus received: reason=%s desc=%s',
                           reason, msg.desc)
 
-    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    @set_ev_cls(EventDP, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
-        # Print SwitchFeatures message
-        msg = ev.msg
-        self.logger.debug('### OFPSwitchFeatures received: '
-                          'datapath_id=0x%016x n_buffers=%d '
-                          'n_tables=%d auxiliary_id=%d '
-                          'capabilities=0x%08x',
-                          msg.datapath_id, msg.n_buffers, msg.n_tables,
-                          msg.auxiliary_id, msg.capabilities)
+        switch = ev.dp
+        self.switchs.append(switch)
 
-        datapath = ev.msg.datapath
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+        parser = switch.ofproto_parser
+
+        # install LLDP flow entry
+        ofproto = switch.ofproto
+        match = parser.OFPMatch(eth_type=0x88CC)
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        msg = parser.OFPFlowMod(switch, command=ofproto.OFPFC_ADD, match=match, instructions=inst)
+        switch.send_msg(msg)
+
         # install table-miss flow entry
         #
         # We specify NO BUFFER to max_len of the output action due to
@@ -64,13 +68,9 @@ class Dijkstra(app_manager.RyuApp):
         # 128, OVS will send Packet-In with invalid buffer_id and
         # truncated packet data. In that case, we cannot output packets
         # correctly.  The bug has been fixed in OVS v2.1.0.
-        match = parser.OFPMatch()
         # The Output action forwards a packet to a specific OpenFlow port.
         # CONTROLLER is a OpenFlow reserved port that represents the controller
         # channel with the OpenFlow controller.
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                          ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, 0, match, actions)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
@@ -93,12 +93,6 @@ class Dijkstra(app_manager.RyuApp):
                           msg.buffer_id, msg.total_len, reason,
                           msg.table_id, msg.cookie, msg.match,
                           utils.hex_array(msg.data))
-
-        pkt = packet.packet.Packet(array.array('B', ev.msg.data))
-        for p in pkt.protocols:
-            print(p)
-            if p.protocol_name == 'ipv4':
-                print(p.src)
 
     @staticmethod
     def add_flow(datapath, priority, match, actions, buffer_id=None):
